@@ -1,0 +1,66 @@
+# --- Python bytecode ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- Packaging / build artifacts ---
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# --- Test / coverage artifacts ---
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# --- Type checker / linter caches ---
+.mypy_cache/
+.pyright/
+.ruff_cache/
+
+# --- IDE / editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- OS junk ---
+.DS_Store
+Thumbs.db
+
+# --- Logs ---
+*.log
+
+# --- Env / secrets ---
+.env
+.env.*
+*.pem
+*.key
+
+# --- Data / outputs (customise for your project) ---
+data/
+outputs/
+artifacts/
+checkpoints/
+runs/
+
+# --- Local config overrides ---
+config.local.yaml
+config.local.json
+
+# --- Temporary files ---
+tmp/
+temp/
