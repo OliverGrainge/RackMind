@@ -102,6 +102,7 @@ class Simulator:
                 cooling_capacity_factor=cooling,
                 server_max_util_override=server_max_util,
                 rack_power_multiplier=rack_mult if rack_mult else None,
+                network_partition_racks=partition_racks if partition_racks else None,
             )
             self.telemetry.append(state)
             states.append(state)

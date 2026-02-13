@@ -169,6 +169,272 @@ def get_carbon() -> dict:
     }
 
 
+# ── GPU endpoints ──────────────────────────────────────────
+
+
+@router.get("/gpu")
+def get_gpu_summary() -> dict:
+    """Facility-wide GPU summary."""
+    sim = get_sim()
+    state = sim.telemetry.get_latest()
+    if state is None:
+        raise HTTPException(404, "No state yet")
+    g = state.gpu
+    return {
+        "total_gpus": g.total_gpus,
+        "healthy_gpus": g.healthy_gpus,
+        "throttled_gpus": g.throttled_gpus,
+        "ecc_error_gpus": g.ecc_error_gpus,
+        "avg_gpu_temp_c": g.avg_gpu_temp_c,
+        "avg_sm_util_pct": g.avg_sm_util_pct,
+        "total_gpu_mem_used_mib": g.total_gpu_mem_used_mib,
+        "total_gpu_mem_total_mib": g.total_gpu_mem_total_mib,
+    }
+
+
+@router.get("/gpu/{server_id}")
+def get_gpu_server(server_id: str) -> dict:
+    """Per-GPU telemetry for a specific server."""
+    sim = get_sim()
+    state = sim.telemetry.get_latest()
+    if state is None:
+        raise HTTPException(404, "No state yet")
+    for srv in state.gpu.servers:
+        if srv.server_id == server_id:
+            return {
+                "server_id": srv.server_id,
+                "rack_id": srv.rack_id,
+                "total_gpu_power_w": srv.total_gpu_power_w,
+                "avg_gpu_temp_c": srv.avg_gpu_temp_c,
+                "total_mem_used_mib": srv.total_mem_used_mib,
+                "total_mem_total_mib": srv.total_mem_total_mib,
+                "gpus": [
+                    {
+                        "gpu_id": gpu.gpu_id,
+                        "sm_utilisation_pct": gpu.sm_utilisation_pct,
+                        "mem_utilisation_pct": gpu.mem_utilisation_pct,
+                        "gpu_temp_c": gpu.gpu_temp_c,
+                        "mem_temp_c": gpu.mem_temp_c,
+                        "power_draw_w": gpu.power_draw_w,
+                        "sm_clock_mhz": gpu.sm_clock_mhz,
+                        "mem_clock_mhz": gpu.mem_clock_mhz,
+                        "mem_used_mib": gpu.mem_used_mib,
+                        "mem_total_mib": gpu.mem_total_mib,
+                        "ecc_sbe_count": gpu.ecc_sbe_count,
+                        "ecc_dbe_count": gpu.ecc_dbe_count,
+                        "pcie_tx_gbps": gpu.pcie_tx_gbps,
+                        "pcie_rx_gbps": gpu.pcie_rx_gbps,
+                        "nvlink_tx_gbps": gpu.nvlink_tx_gbps,
+                        "nvlink_rx_gbps": gpu.nvlink_rx_gbps,
+                        "fan_speed_pct": gpu.fan_speed_pct,
+                        "thermal_throttle": gpu.thermal_throttle,
+                        "power_throttle": gpu.power_throttle,
+                    }
+                    for gpu in srv.gpus
+                ],
+            }
+    raise HTTPException(404, f"Server {server_id} not found")
+
+
+# ── Network endpoints ──────────────────────────────────────
+
+
+@router.get("/network")
+def get_network_summary() -> dict:
+    """Facility-wide network summary."""
+    sim = get_sim()
+    state = sim.telemetry.get_latest()
+    if state is None:
+        raise HTTPException(404, "No state yet")
+    n = state.network
+    return {
+        "total_east_west_gbps": n.total_east_west_gbps,
+        "total_north_south_gbps": n.total_north_south_gbps,
+        "total_rdma_gbps": n.total_rdma_gbps,
+        "avg_fabric_latency_us": n.avg_fabric_latency_us,
+        "total_packet_loss_pct": n.total_packet_loss_pct,
+        "total_crc_errors": n.total_crc_errors,
+        "racks": [
+            {
+                "rack_id": r.rack_id,
+                "ingress_gbps": r.ingress_gbps,
+                "egress_gbps": r.egress_gbps,
+                "intra_rack_gbps": r.intra_rack_gbps,
+                "tor_utilisation_pct": r.tor_utilisation_pct,
+                "avg_latency_us": r.avg_latency_us,
+                "p99_latency_us": r.p99_latency_us,
+                "packet_loss_pct": r.packet_loss_pct,
+                "rdma_tx_gbps": r.rdma_tx_gbps,
+                "rdma_rx_gbps": r.rdma_rx_gbps,
+                "active_ports": r.active_ports,
+                "total_ports": r.total_ports,
+            }
+            for r in n.racks
+        ],
+        "spine_links": [
+            {
+                "src_rack_id": s.src_rack_id,
+                "dst_rack_id": s.dst_rack_id,
+                "bandwidth_gbps": s.bandwidth_gbps,
+                "utilisation_pct": s.utilisation_pct,
+                "latency_us": s.latency_us,
+            }
+            for s in n.spine_links
+        ],
+    }
+
+
+@router.get("/network/{rack_id}")
+def get_network_rack(rack_id: int) -> dict:
+    """Single rack network state."""
+    sim = get_sim()
+    state = sim.telemetry.get_latest()
+    if state is None:
+        raise HTTPException(404, "No state yet")
+    for r in state.network.racks:
+        if r.rack_id == rack_id:
+            return {
+                "rack_id": r.rack_id,
+                "ingress_gbps": r.ingress_gbps,
+                "egress_gbps": r.egress_gbps,
+                "intra_rack_gbps": r.intra_rack_gbps,
+                "tor_utilisation_pct": r.tor_utilisation_pct,
+                "avg_latency_us": r.avg_latency_us,
+                "p99_latency_us": r.p99_latency_us,
+                "packet_loss_pct": r.packet_loss_pct,
+                "crc_errors": r.crc_errors,
+                "rdma_tx_gbps": r.rdma_tx_gbps,
+                "rdma_rx_gbps": r.rdma_rx_gbps,
+                "active_ports": r.active_ports,
+                "total_ports": r.total_ports,
+            }
+    raise HTTPException(404, f"Rack {rack_id} not found")
+
+
+# ── Storage endpoints ──────────────────────────────────────
+
+
+@router.get("/storage")
+def get_storage_summary() -> dict:
+    """Facility-wide storage summary."""
+    sim = get_sim()
+    state = sim.telemetry.get_latest()
+    if state is None:
+        raise HTTPException(404, "No state yet")
+    s = state.storage
+    return {
+        "total_read_iops": s.total_read_iops,
+        "total_write_iops": s.total_write_iops,
+        "total_read_throughput_gbps": s.total_read_throughput_gbps,
+        "total_write_throughput_gbps": s.total_write_throughput_gbps,
+        "total_used_tb": s.total_used_tb,
+        "total_capacity_tb": s.total_capacity_tb,
+        "avg_read_latency_us": s.avg_read_latency_us,
+        "avg_write_latency_us": s.avg_write_latency_us,
+        "racks": [
+            {
+                "rack_id": r.rack_id,
+                "read_iops": r.read_iops,
+                "write_iops": r.write_iops,
+                "total_iops": r.total_iops,
+                "max_iops": r.max_iops,
+                "read_throughput_gbps": r.read_throughput_gbps,
+                "write_throughput_gbps": r.write_throughput_gbps,
+                "avg_read_latency_us": r.avg_read_latency_us,
+                "avg_write_latency_us": r.avg_write_latency_us,
+                "p99_read_latency_us": r.p99_read_latency_us,
+                "used_tb": r.used_tb,
+                "total_tb": r.total_tb,
+                "utilisation_pct": r.utilisation_pct,
+                "drive_health_pct": r.drive_health_pct,
+                "queue_depth": r.queue_depth,
+            }
+            for r in s.racks
+        ],
+    }
+
+
+@router.get("/storage/{rack_id}")
+def get_storage_rack(rack_id: int) -> dict:
+    """Single rack storage state."""
+    sim = get_sim()
+    state = sim.telemetry.get_latest()
+    if state is None:
+        raise HTTPException(404, "No state yet")
+    for r in state.storage.racks:
+        if r.rack_id == rack_id:
+            return {
+                "rack_id": r.rack_id,
+                "read_iops": r.read_iops,
+                "write_iops": r.write_iops,
+                "total_iops": r.total_iops,
+                "read_throughput_gbps": r.read_throughput_gbps,
+                "write_throughput_gbps": r.write_throughput_gbps,
+                "avg_read_latency_us": r.avg_read_latency_us,
+                "avg_write_latency_us": r.avg_write_latency_us,
+                "p99_read_latency_us": r.p99_read_latency_us,
+                "used_tb": r.used_tb,
+                "total_tb": r.total_tb,
+                "drive_health_pct": r.drive_health_pct,
+                "queue_depth": r.queue_depth,
+            }
+    raise HTTPException(404, f"Rack {rack_id} not found")
+
+
+# ── Cooling endpoints ──────────────────────────────────────
+
+
+@router.get("/cooling")
+def get_cooling() -> dict:
+    """Facility cooling system state."""
+    sim = get_sim()
+    state = sim.telemetry.get_latest()
+    if state is None:
+        raise HTTPException(404, "No state yet")
+    c = state.cooling
+    return {
+        "total_cooling_output_kw": c.total_cooling_output_kw,
+        "total_cooling_capacity_kw": c.total_cooling_capacity_kw,
+        "cooling_load_pct": c.cooling_load_pct,
+        "cop": c.cop,
+        "cooling_power_kw": c.cooling_power_kw,
+        "chw_plant_supply_temp_c": c.chw_plant_supply_temp_c,
+        "chw_plant_return_temp_c": c.chw_plant_return_temp_c,
+        "chw_plant_delta_t_c": c.chw_plant_delta_t_c,
+        "pump_power_kw": c.pump_power_kw,
+        "pump_flow_rate_lps": c.pump_flow_rate_lps,
+        "cooling_tower": {
+            "condenser_supply_temp_c": c.cooling_tower.condenser_supply_temp_c,
+            "condenser_return_temp_c": c.cooling_tower.condenser_return_temp_c,
+            "wet_bulb_temp_c": c.cooling_tower.wet_bulb_temp_c,
+            "approach_temp_c": c.cooling_tower.approach_temp_c,
+            "fan_speed_pct": c.cooling_tower.fan_speed_pct,
+            "heat_rejection_kw": c.cooling_tower.heat_rejection_kw,
+        },
+        "crac_units": [
+            {
+                "unit_id": u.unit_id,
+                "supply_air_temp_c": u.supply_air_temp_c,
+                "return_air_temp_c": u.return_air_temp_c,
+                "fan_speed_pct": u.fan_speed_pct,
+                "airflow_cfm": u.airflow_cfm,
+                "chw_supply_temp_c": u.chw_supply_temp_c,
+                "chw_return_temp_c": u.chw_return_temp_c,
+                "chw_flow_rate_lps": u.chw_flow_rate_lps,
+                "cooling_output_kw": u.cooling_output_kw,
+                "cooling_capacity_kw": u.cooling_capacity_kw,
+                "load_pct": u.load_pct,
+                "operational": u.operational,
+                "fault_code": u.fault_code,
+            }
+            for u in c.crac_units
+        ],
+    }
+
+
+# ── Workload endpoints ─────────────────────────────────────
+
+
 @router.get("/workload/queue")
 def get_workload_queue() -> dict:
     """All pending jobs."""

@@ -226,7 +226,7 @@ def main():
         f"@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap');"
         f'.stApp {{ background-color: {C_BG}; }}'
         f"* {{ font-family: 'JetBrains Mono', 'Courier New', monospace !important; }}"
-        f'.block-container {{ padding-top: 0 !important; max-width: 100% !important; }}'
+        f'.block-container {{ padding-top: 1rem !important; max-width: 100% !important; }}'
         f'header[data-testid="stHeader"] {{ display: none !important; }}'
         f'section[data-testid="stSidebar"] {{ background: {C_CARD} !important; border-right: 1px solid {C_BORDER}; }}'
         f'section[data-testid="stSidebar"] * {{ color: {C_TEXT} !important; }}'
@@ -305,8 +305,8 @@ def main():
 
     st.html(
         f'<style>@keyframes pulse {{ 0%,100% {{ opacity:1; }} 50% {{ opacity:0.4; }} }}</style>'
-        f'<div style="background:{C_CARD};border-bottom:1px solid {C_BORDER};padding:8px 20px;'
-        f'display:flex;align-items:center;justify-content:space-between;margin:-1rem -1rem 12px -1rem;">'
+        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;padding:8px 20px;'
+        f'display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">'
         f'<div style="display:flex;align-items:center;gap:16px;">'
         f'{running_dot}'
         f'<span style="color:{C_GREEN};font-size:14px;font-weight:700;letter-spacing:1px;">DC_SIM</span>'
@@ -350,12 +350,16 @@ def main():
             st.rerun()
 
     # ── Tabs ────────────────────────────────────────────
-    tab_overview, tab_infra, tab_fleet, tab_carbon_tab = st.tabs(
-        ["OVERVIEW", "INFRASTRUCTURE", "FLEET", "CARBON"]
+    tab_overview, tab_infra, tab_fleet, tab_gpu_tab, tab_net_tab, tab_storage_tab, tab_cool_tab, tab_carbon_tab = st.tabs(
+        ["OVERVIEW", "INFRASTRUCTURE", "FLEET", "GPU", "NETWORK", "STORAGE", "COOLING", "CARBON"]
     )
 
     thermal_racks = thermal.get("racks", [])
     power_racks = power.get("racks", [])
+    gpu_data = status.get("gpu", {})
+    net_data = status.get("network", {})
+    storage_data = status.get("storage", {})
+    cooling_data = status.get("cooling", {})
 
     # ════════════════════════════════════════════════════
     # TAB: OVERVIEW
@@ -391,6 +395,43 @@ def main():
         st.html(
             f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:8px;">'
             f'{card1}{card2}{card3}{card4}'
+            f'</div>'
+        )
+
+        # ── Second row: GPU, Network, Storage, Cooling summaries ──
+        gpu_healthy = gpu_data.get("healthy_gpus", 0)
+        gpu_total = gpu_data.get("total_gpus", 128)
+        gpu_mem_used = gpu_data.get("total_gpu_mem_used_mib", 0)
+        gpu_mem_total = gpu_data.get("total_gpu_mem_total_mib", 1)
+        gpu_bar = _progress_bar(gpu_healthy, gpu_total, C_GREEN,
+                                f"{gpu_healthy} HEALTHY", f"{gpu_data.get('throttled_gpus', 0)} THROT")
+        card_gpu = _stat_card("GPU FLEET", f"{gpu_data.get('avg_sm_util_pct', 0):.0f}% SM",
+                              C_CYAN, "", f"MEM: {gpu_mem_used/1024:.0f}/{gpu_mem_total/1024:.0f} GiB", gpu_bar)
+
+        net_ew = net_data.get("total_east_west_gbps", 0)
+        net_ns = net_data.get("total_north_south_gbps", 0)
+        net_lat = net_data.get("avg_fabric_latency_us", 5)
+        card_net = _stat_card("NETWORK", f"{net_ew + net_ns:.1f} Gbps",
+                              C_BLUE, "", f"LAT: {net_lat:.0f}us / RDMA: {net_data.get('total_rdma_gbps', 0):.1f}G")
+
+        sto_iops = storage_data.get("total_read_iops", 0) + storage_data.get("total_write_iops", 0)
+        sto_used = storage_data.get("total_used_tb", 0)
+        sto_cap = storage_data.get("total_capacity_tb", 1)
+        sto_bar = _progress_bar(sto_used, sto_cap, C_AMBER, f"{sto_used:.0f}TB", f"{sto_cap:.0f}TB")
+        card_sto = _stat_card("STORAGE", f"{sto_iops/1000:.0f}K IOPS",
+                              C_AMBER, "", f"R: {storage_data.get('avg_read_latency_us', 0):.0f}us", sto_bar)
+
+        cool_cop = cooling_data.get("cop", 4.0)
+        cool_load = cooling_data.get("cooling_load_pct", 0)
+        cool_bar = _progress_bar(cool_load, 100, C_GREEN if cool_load < 70 else (C_AMBER if cool_load < 90 else C_RED),
+                                 f"{cool_load:.0f}%", "100%")
+        card_cool = _stat_card("COOLING", f"COP {cool_cop:.1f}",
+                               C_GREEN if cool_cop > 3.5 else C_AMBER, "",
+                               f"CHW: {cooling_data.get('chw_plant_supply_temp_c', 7):.1f}C", cool_bar)
+
+        st.html(
+            f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:8px;">'
+            f'{card_gpu}{card_net}{card_sto}{card_cool}'
             f'</div>'
         )
 
@@ -669,6 +710,328 @@ def main():
             st.html(
                 f'<div style="color:{C_MUTED};font-size:11px;padding:20px;">'
                 f'ADVANCE SIMULATION TO SEE DATA</div>'
+            )
+
+    # ════════════════════════════════════════════════════
+    # TAB: GPU
+    # ════════════════════════════════════════════════════
+    with tab_gpu_tab:
+        st.html(_section_title("GPU TELEMETRY"))
+
+        # Summary cards
+        gpu_detail = fetch_json("/gpu", api_url) or {}
+        g_total = gpu_detail.get("total_gpus", 0)
+        g_healthy = gpu_detail.get("healthy_gpus", 0)
+        g_throttled = gpu_detail.get("throttled_gpus", 0)
+        g_ecc = gpu_detail.get("ecc_error_gpus", 0)
+        g_temp = gpu_detail.get("avg_gpu_temp_c", 35)
+        g_util = gpu_detail.get("avg_sm_util_pct", 0)
+        g_mem_u = gpu_detail.get("total_gpu_mem_used_mib", 0)
+        g_mem_t = gpu_detail.get("total_gpu_mem_total_mib", 1)
+
+        bar_h = _progress_bar(g_healthy, g_total, C_GREEN, f"{g_healthy}", f"{g_total}")
+        gc1 = _stat_card("HEALTHY GPUS", f"{g_healthy}/{g_total}",
+                         C_GREEN if g_healthy == g_total else C_AMBER, "", "", bar_h)
+        bar_u = _progress_bar(g_util, 100, C_CYAN, f"{g_util:.0f}%", "100%")
+        gc2 = _stat_card("AVG SM UTIL", f"{g_util:.1f}%", C_CYAN, "", "", bar_u)
+        gc3 = _stat_card("AVG GPU TEMP", f"{g_temp:.1f}C",
+                         C_RED if g_temp > 80 else (C_AMBER if g_temp > 65 else C_GREEN), "",
+                         f"THROTTLED: {g_throttled}")
+        bar_m = _progress_bar(g_mem_u, g_mem_t, C_PURPLE, f"{g_mem_u/1024:.0f}GiB", f"{g_mem_t/1024:.0f}GiB")
+        gc4 = _stat_card("GPU MEMORY", f"{g_mem_u/g_mem_t*100:.0f}%", C_PURPLE, "",
+                         f"ECC ERRORS: {g_ecc}", bar_m)
+
+        st.html(
+            f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:12px;">'
+            f'{gc1}{gc2}{gc3}{gc4}'
+            f'</div>'
+        )
+
+        # Per-server GPU table
+        st.html(_section_title("PER-SERVER GPU DETAIL"))
+        gpu_full = fetch_json("/gpu", api_url) or {}
+        # Show table for first few servers
+        for rack_id in range(min(4, 8)):  # Show first 4 racks
+            srv_id = f"rack-{rack_id}-srv-0"
+            srv_data = fetch_json(f"/gpu/{srv_id}", api_url)
+            if srv_data and srv_data.get("gpus"):
+                gpus = srv_data["gpus"]
+                rows_html = ""
+                for g in gpus:
+                    temp_c = C_RED if g["gpu_temp_c"] > 80 else (C_AMBER if g["gpu_temp_c"] > 65 else C_GREEN)
+                    mem_pct = g["mem_used_mib"] / max(1, g["mem_total_mib"]) * 100
+                    thr_badge = (f'<span style="color:{C_RED};font-size:9px;"> THR</span>'
+                                 if g["thermal_throttle"] else "")
+                    rows_html += (
+                        f'<tr style="border-bottom:1px solid {C_BORDER};">'
+                        f'<td style="padding:4px 6px;font-size:10px;color:{C_TEXT};">{g["gpu_id"].split("-")[-1].upper()}</td>'
+                        f'<td style="padding:4px 6px;font-size:10px;color:{C_CYAN};">{g["sm_utilisation_pct"]:.0f}%</td>'
+                        f'<td style="padding:4px 6px;font-size:10px;color:{temp_c};">{g["gpu_temp_c"]:.0f}C{thr_badge}</td>'
+                        f'<td style="padding:4px 6px;font-size:10px;color:{C_TEXT};">{g["power_draw_w"]:.0f}W</td>'
+                        f'<td style="padding:4px 6px;font-size:10px;color:{C_PURPLE};">{mem_pct:.0f}%</td>'
+                        f'<td style="padding:4px 6px;font-size:10px;color:{C_TEXT};">{g["sm_clock_mhz"]}</td>'
+                        f'<td style="padding:4px 6px;font-size:10px;color:{C_MUTED};">{g["fan_speed_pct"]:.0f}%</td>'
+                        f'<td style="padding:4px 6px;font-size:10px;color:{C_BLUE};">{g["pcie_tx_gbps"]:.1f}/{g["pcie_rx_gbps"]:.1f}</td>'
+                        f'<td style="padding:4px 6px;font-size:10px;color:{C_MUTED};">{g["ecc_sbe_count"]}/{g["ecc_dbe_count"]}</td>'
+                        f'</tr>'
+                    )
+                st.html(
+                    f'<div style="margin-bottom:8px;">'
+                    f'<div style="color:{C_CYAN};font-size:10px;margin-bottom:4px;">{srv_id.upper()}</div>'
+                    f'<table style="width:100%;border-collapse:collapse;font-family:\'Courier New\',monospace;">'
+                    f'<thead><tr style="border-bottom:1px solid {C_BORDER};">'
+                    f'<th style="text-align:left;padding:4px 6px;font-size:9px;color:{C_LABEL};">GPU</th>'
+                    f'<th style="text-align:left;padding:4px 6px;font-size:9px;color:{C_LABEL};">SM%</th>'
+                    f'<th style="text-align:left;padding:4px 6px;font-size:9px;color:{C_LABEL};">TEMP</th>'
+                    f'<th style="text-align:left;padding:4px 6px;font-size:9px;color:{C_LABEL};">PWR</th>'
+                    f'<th style="text-align:left;padding:4px 6px;font-size:9px;color:{C_LABEL};">MEM%</th>'
+                    f'<th style="text-align:left;padding:4px 6px;font-size:9px;color:{C_LABEL};">CLK</th>'
+                    f'<th style="text-align:left;padding:4px 6px;font-size:9px;color:{C_LABEL};">FAN</th>'
+                    f'<th style="text-align:left;padding:4px 6px;font-size:9px;color:{C_LABEL};">PCIe TX/RX</th>'
+                    f'<th style="text-align:left;padding:4px 6px;font-size:9px;color:{C_LABEL};">ECC S/D</th>'
+                    f'</tr></thead><tbody>{rows_html}</tbody></table></div>'
+                )
+
+    # ════════════════════════════════════════════════════
+    # TAB: NETWORK
+    # ════════════════════════════════════════════════════
+    with tab_net_tab:
+        st.html(_section_title("NETWORK FABRIC"))
+
+        net_detail = fetch_json("/network", api_url) or {}
+        n_ew = net_detail.get("total_east_west_gbps", 0)
+        n_ns = net_detail.get("total_north_south_gbps", 0)
+        n_rdma = net_detail.get("total_rdma_gbps", 0)
+        n_lat = net_detail.get("avg_fabric_latency_us", 5)
+        n_loss = net_detail.get("total_packet_loss_pct", 0)
+        n_crc = net_detail.get("total_crc_errors", 0)
+
+        nc1 = _stat_card("EAST-WEST", f"{n_ew:.1f} Gbps", C_GREEN, "", "INTRA-DC TRAFFIC")
+        nc2 = _stat_card("NORTH-SOUTH", f"{n_ns:.1f} Gbps", C_CYAN, "", "EXTERNAL TRAFFIC")
+        nc3 = _stat_card("RDMA FABRIC", f"{n_rdma:.1f} Gbps", C_PURPLE, "", "GPU-TO-GPU")
+        loss_c = C_RED if n_loss > 0.1 else (C_AMBER if n_loss > 0.01 else C_GREEN)
+        nc4 = _stat_card("FABRIC LATENCY", f"{n_lat:.0f} us", loss_c, "",
+                         f"LOSS: {n_loss:.3f}% / CRC: {n_crc}")
+
+        st.html(
+            f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:12px;">'
+            f'{nc1}{nc2}{nc3}{nc4}'
+            f'</div>'
+        )
+
+        # Per-rack ToR switch table
+        st.html(_section_title("TOR SWITCH TELEMETRY"))
+        net_racks = net_detail.get("racks", [])
+        if net_racks:
+            nr_rows = ""
+            for r in net_racks:
+                tor_c = C_RED if r["tor_utilisation_pct"] > 80 else (C_AMBER if r["tor_utilisation_pct"] > 50 else C_GREEN)
+                nr_rows += (
+                    f'<tr style="border-bottom:1px solid {C_BORDER};">'
+                    f'<td style="padding:6px;font-size:11px;color:{C_TEXT};">R{r["rack_id"]:03d}</td>'
+                    f'<td style="padding:6px;font-size:11px;color:{C_GREEN};">{r["ingress_gbps"]:.1f}</td>'
+                    f'<td style="padding:6px;font-size:11px;color:{C_CYAN};">{r["egress_gbps"]:.1f}</td>'
+                    f'<td style="padding:6px;font-size:11px;color:{C_MUTED};">{r["intra_rack_gbps"]:.1f}</td>'
+                    f'<td style="padding:6px;font-size:11px;color:{tor_c};">{r["tor_utilisation_pct"]:.0f}%</td>'
+                    f'<td style="padding:6px;font-size:11px;color:{C_TEXT};">{r["avg_latency_us"]:.0f}</td>'
+                    f'<td style="padding:6px;font-size:11px;color:{C_AMBER};">{r["p99_latency_us"]:.0f}</td>'
+                    f'<td style="padding:6px;font-size:11px;color:{C_PURPLE};">{r["rdma_tx_gbps"]:.1f}/{r["rdma_rx_gbps"]:.1f}</td>'
+                    f'<td style="padding:6px;font-size:11px;color:{C_MUTED};">{r["active_ports"]}/{r["total_ports"]}</td>'
+                    f'</tr>'
+                )
+            st.html(
+                f'<table style="width:100%;border-collapse:collapse;font-family:\'Courier New\',monospace;">'
+                f'<thead><tr style="border-bottom:1px solid {C_BORDER};">'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">RACK</th>'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">IN Gbps</th>'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">OUT Gbps</th>'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">INTRA</th>'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">ToR%</th>'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">AVG us</th>'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">P99 us</th>'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">RDMA TX/RX</th>'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">PORTS</th>'
+                f'</tr></thead><tbody>{nr_rows}</tbody></table>'
+            )
+
+        # Spine links
+        spine = net_detail.get("spine_links", [])
+        if spine:
+            st.html(_section_title("SPINE FABRIC LINKS"))
+            sp_rows = ""
+            for s in spine:
+                sp_rows += (
+                    f'<tr style="border-bottom:1px solid {C_BORDER};">'
+                    f'<td style="padding:4px 6px;font-size:10px;color:{C_TEXT};">R{s["src_rack_id"]:02d} ↔ R{s["dst_rack_id"]:02d}</td>'
+                    f'<td style="padding:4px 6px;font-size:10px;color:{C_CYAN};">{s["bandwidth_gbps"]:.1f}</td>'
+                    f'<td style="padding:4px 6px;font-size:10px;color:{C_AMBER};">{s["utilisation_pct"]:.1f}%</td>'
+                    f'<td style="padding:4px 6px;font-size:10px;color:{C_TEXT};">{s["latency_us"]:.1f}</td>'
+                    f'</tr>'
+                )
+            st.html(
+                f'<table style="width:50%;border-collapse:collapse;font-family:\'Courier New\',monospace;">'
+                f'<thead><tr style="border-bottom:1px solid {C_BORDER};">'
+                f'<th style="text-align:left;padding:4px 6px;font-size:9px;color:{C_LABEL};">LINK</th>'
+                f'<th style="text-align:left;padding:4px 6px;font-size:9px;color:{C_LABEL};">BW Gbps</th>'
+                f'<th style="text-align:left;padding:4px 6px;font-size:9px;color:{C_LABEL};">UTIL%</th>'
+                f'<th style="text-align:left;padding:4px 6px;font-size:9px;color:{C_LABEL};">LAT us</th>'
+                f'</tr></thead><tbody>{sp_rows}</tbody></table>'
+            )
+
+    # ════════════════════════════════════════════════════
+    # TAB: STORAGE
+    # ════════════════════════════════════════════════════
+    with tab_storage_tab:
+        st.html(_section_title("STORAGE I/O"))
+
+        sto_detail = fetch_json("/storage", api_url) or {}
+        s_r_iops = sto_detail.get("total_read_iops", 0)
+        s_w_iops = sto_detail.get("total_write_iops", 0)
+        s_r_tp = sto_detail.get("total_read_throughput_gbps", 0)
+        s_w_tp = sto_detail.get("total_write_throughput_gbps", 0)
+        s_used = sto_detail.get("total_used_tb", 0)
+        s_cap = sto_detail.get("total_capacity_tb", 1)
+        s_r_lat = sto_detail.get("avg_read_latency_us", 80)
+        s_w_lat = sto_detail.get("avg_write_latency_us", 20)
+
+        sc1 = _stat_card("READ IOPS", f"{s_r_iops/1000:.0f}K", C_GREEN, "", f"LATENCY: {s_r_lat:.0f}us")
+        sc2 = _stat_card("WRITE IOPS", f"{s_w_iops/1000:.0f}K", C_AMBER, "", f"LATENCY: {s_w_lat:.0f}us")
+        bar_tp = _progress_bar(s_r_tp + s_w_tp, 200, C_CYAN,
+                               f"R:{s_r_tp:.1f}G", f"W:{s_w_tp:.1f}G")
+        sc3 = _stat_card("THROUGHPUT", f"{s_r_tp + s_w_tp:.1f} Gbps", C_CYAN, "", "", bar_tp)
+        bar_cap = _progress_bar(s_used, s_cap, C_AMBER if s_used/s_cap > 0.7 else C_GREEN,
+                                f"{s_used:.0f}TB", f"{s_cap:.0f}TB")
+        sc4 = _stat_card("CAPACITY", f"{s_used/s_cap*100:.0f}%", C_AMBER, "", "USED", bar_cap)
+
+        st.html(
+            f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:12px;">'
+            f'{sc1}{sc2}{sc3}{sc4}'
+            f'</div>'
+        )
+
+        # Per-rack storage table
+        st.html(_section_title("PER-RACK NVMe SHELVES"))
+        sto_racks = sto_detail.get("racks", [])
+        if sto_racks:
+            sr_rows = ""
+            for r in sto_racks:
+                health_c = C_GREEN if r["drive_health_pct"] > 90 else (C_AMBER if r["drive_health_pct"] > 70 else C_RED)
+                sr_rows += (
+                    f'<tr style="border-bottom:1px solid {C_BORDER};">'
+                    f'<td style="padding:6px;font-size:11px;color:{C_TEXT};">R{r["rack_id"]:03d}</td>'
+                    f'<td style="padding:6px;font-size:11px;color:{C_GREEN};">{r["read_iops"]/1000:.0f}K</td>'
+                    f'<td style="padding:6px;font-size:11px;color:{C_AMBER};">{r["write_iops"]/1000:.0f}K</td>'
+                    f'<td style="padding:6px;font-size:11px;color:{C_CYAN};">{r["read_throughput_gbps"]:.1f}</td>'
+                    f'<td style="padding:6px;font-size:11px;color:{C_CYAN};">{r["write_throughput_gbps"]:.1f}</td>'
+                    f'<td style="padding:6px;font-size:11px;color:{C_TEXT};">{r["avg_read_latency_us"]:.0f}</td>'
+                    f'<td style="padding:6px;font-size:11px;color:{C_AMBER};">{r["p99_read_latency_us"]:.0f}</td>'
+                    f'<td style="padding:6px;font-size:11px;color:{C_TEXT};">{r["used_tb"]:.1f}/{r["total_tb"]:.0f}</td>'
+                    f'<td style="padding:6px;font-size:11px;color:{health_c};">{r["drive_health_pct"]:.1f}%</td>'
+                    f'<td style="padding:6px;font-size:11px;color:{C_MUTED};">{r["queue_depth"]}</td>'
+                    f'</tr>'
+                )
+            st.html(
+                f'<table style="width:100%;border-collapse:collapse;font-family:\'Courier New\',monospace;">'
+                f'<thead><tr style="border-bottom:1px solid {C_BORDER};">'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">RACK</th>'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">R IOPS</th>'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">W IOPS</th>'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">R Gbps</th>'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">W Gbps</th>'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">R LAT</th>'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">P99 LAT</th>'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">USED/CAP TB</th>'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">HEALTH</th>'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">QD</th>'
+                f'</tr></thead><tbody>{sr_rows}</tbody></table>'
+            )
+
+    # ════════════════════════════════════════════════════
+    # TAB: COOLING
+    # ════════════════════════════════════════════════════
+    with tab_cool_tab:
+        st.html(_section_title("COOLING PLANT"))
+
+        cool_detail = fetch_json("/cooling", api_url) or {}
+        c_cop = cool_detail.get("cop", 4.0)
+        c_load = cool_detail.get("cooling_load_pct", 0)
+        c_output = cool_detail.get("total_cooling_output_kw", 0)
+        c_capacity = cool_detail.get("total_cooling_capacity_kw", 1)
+        c_power = cool_detail.get("cooling_power_kw", 0)
+        c_chw_s = cool_detail.get("chw_plant_supply_temp_c", 7)
+        c_chw_r = cool_detail.get("chw_plant_return_temp_c", 12)
+        c_chw_dt = cool_detail.get("chw_plant_delta_t_c", 5)
+        c_pump_pwr = cool_detail.get("pump_power_kw", 2)
+        c_pump_flow = cool_detail.get("pump_flow_rate_lps", 20)
+
+        cop_c = C_GREEN if c_cop > 3.5 else (C_AMBER if c_cop > 2.5 else C_RED)
+        bar_load = _progress_bar(c_load, 100,
+                                 C_GREEN if c_load < 70 else (C_AMBER if c_load < 90 else C_RED),
+                                 f"{c_load:.0f}%", "100%")
+        cl1 = _stat_card("COP", f"{c_cop:.2f}", cop_c, "", "EFFICIENCY RATIO", bar_load)
+        cl2 = _stat_card("COOLING OUTPUT", f"{c_output:.0f} kW", C_CYAN, "",
+                         f"CAPACITY: {c_capacity:.0f} kW")
+        cl3 = _stat_card("CHW TEMPS", f"{c_chw_s:.1f}C / {c_chw_r:.1f}C", C_BLUE, "",
+                         f"DELTA-T: {c_chw_dt:.1f}C")
+        cl4 = _stat_card("COOLING POWER", f"{c_power:.1f} kW", C_AMBER, "",
+                         f"PUMP: {c_pump_pwr:.1f}kW / {c_pump_flow:.0f} L/s")
+
+        st.html(
+            f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:12px;">'
+            f'{cl1}{cl2}{cl3}{cl4}'
+            f'</div>'
+        )
+
+        # Cooling tower
+        tower = cool_detail.get("cooling_tower", {})
+        if tower:
+            st.html(_section_title("COOLING TOWER"))
+            st.html(
+                f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px;">'
+                + _stat_card("WET BULB", f"{tower.get('wet_bulb_temp_c', 18):.1f}C", C_BLUE, "", "AMBIENT")
+                + _stat_card("CONDENSER", f"{tower.get('condenser_supply_temp_c', 28):.1f}C / {tower.get('condenser_return_temp_c', 33):.1f}C",
+                             C_CYAN, "", f"APPROACH: {tower.get('approach_temp_c', 5):.1f}C")
+                + _stat_card("TOWER FAN", f"{tower.get('fan_speed_pct', 40):.0f}%", C_MUTED, "",
+                             f"REJECTION: {tower.get('heat_rejection_kw', 0):.0f} kW")
+                + f'</div>'
+            )
+
+        # CRAC units table
+        crac_units = cool_detail.get("crac_units", [])
+        if crac_units:
+            st.html(_section_title("CRAC UNITS"))
+            cr_rows = ""
+            for u in crac_units:
+                op_c = C_GREEN if u["operational"] else C_RED
+                op_text = "ONLINE" if u["operational"] else "FAULT"
+                cr_rows += (
+                    f'<tr style="border-bottom:1px solid {C_BORDER};">'
+                    f'<td style="padding:6px;font-size:11px;color:{C_TEXT};">CRAC-{u["unit_id"]:02d}</td>'
+                    f'<td style="padding:6px;font-size:11px;color:{op_c};font-weight:600;">{op_text}</td>'
+                    f'<td style="padding:6px;font-size:11px;color:{C_CYAN};">{u["supply_air_temp_c"]:.1f}</td>'
+                    f'<td style="padding:6px;font-size:11px;color:{C_AMBER};">{u["return_air_temp_c"]:.1f}</td>'
+                    f'<td style="padding:6px;font-size:11px;color:{C_TEXT};">{u["fan_speed_pct"]:.0f}%</td>'
+                    f'<td style="padding:6px;font-size:11px;color:{C_TEXT};">{u["airflow_cfm"]:.0f}</td>'
+                    f'<td style="padding:6px;font-size:11px;color:{C_BLUE};">{u["chw_supply_temp_c"]:.1f}/{u["chw_return_temp_c"]:.1f}</td>'
+                    f'<td style="padding:6px;font-size:11px;color:{C_TEXT};">{u["chw_flow_rate_lps"]:.1f}</td>'
+                    f'<td style="padding:6px;font-size:11px;color:{C_GREEN};">{u["cooling_output_kw"]:.0f}/{u["cooling_capacity_kw"]:.0f}</td>'
+                    f'<td style="padding:6px;font-size:11px;color:{C_MUTED};">{u["load_pct"]:.0f}%</td>'
+                    f'</tr>'
+                )
+            st.html(
+                f'<table style="width:100%;border-collapse:collapse;font-family:\'Courier New\',monospace;">'
+                f'<thead><tr style="border-bottom:1px solid {C_BORDER};">'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">UNIT</th>'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">STATUS</th>'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">SUPPLY C</th>'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">RETURN C</th>'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">FAN%</th>'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">CFM</th>'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">CHW S/R</th>'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">FLOW L/s</th>'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">OUT/CAP kW</th>'
+                f'<th style="text-align:left;padding:6px;font-size:10px;color:{C_LABEL};">LOAD%</th>'
+                f'</tr></thead><tbody>{cr_rows}</tbody></table>'
             )
 
     # ════════════════════════════════════════════════════
