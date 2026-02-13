@@ -1,0 +1,19 @@
+"""FastAPI app entrypoint for the data centre simulator."""
+
+from fastapi import FastAPI
+
+from dc_sim.api.routes import router, set_simulator
+from dc_sim.config import SimConfig
+from dc_sim.simulator import Simulator
+
+
+def create_app(config: SimConfig | None = None) -> FastAPI:
+    """Create and configure the FastAPI application."""
+    app = FastAPI(title="DC Simulator", description="Simulated data centre for agent development")
+    sim = Simulator(config)
+    set_simulator(sim)
+    app.include_router(router, tags=["simulator"])
+    return app
+
+
+app = create_app()

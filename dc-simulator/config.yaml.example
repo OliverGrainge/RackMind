@@ -1,0 +1,30 @@
+# Example configuration - set DC_SIM_CONFIG=config.yaml to use
+
+facility:
+  num_racks: 8
+  servers_per_rack: 4
+  gpus_per_server: 4
+
+thermal:
+  ambient_temp_c: 22.0
+  crac_setpoint_c: 18.0
+  crac_cooling_capacity_kw: 50.0
+  thermal_mass_coefficient: 0.3
+  max_safe_inlet_temp_c: 35.0
+  critical_inlet_temp_c: 40.0
+
+power:
+  gpu_tdp_watts: 300
+  server_base_power_watts: 200
+  pdu_capacity_kw: 20.0
+  facility_power_cap_kw: 120.0
+  pue_overhead_factor: 1.4
+
+workload:
+  mean_job_arrival_interval_s: 300
+  job_duration_range_s: [600, 7200]
+  gpu_requirement_range: [1, 8]
+
+clock:
+  tick_interval_s: 60
+  realtime_factor: 0.0
