@@ -28,6 +28,12 @@ C_TEXT = "#c0ccdd"
 C_WHITE = "#e8eef5"
 
 
+def hex_to_rgba(hex_colour: str, alpha: float = 0.1) -> str:
+    """Convert '#RRGGBB' → 'rgba(R,G,B,alpha)'."""
+    h = hex_colour.lstrip("#")
+    return f"rgba({int(h[0:2],16)},{int(h[2:4],16)},{int(h[4:6],16)},{alpha})"
+
+
 def fetch_json(path: str, base_url: str) -> dict | None:
     try:
         r = httpx.get(f"{base_url}{path}", timeout=2.0)
@@ -39,7 +45,7 @@ def fetch_json(path: str, base_url: str) -> dict | None:
 
 def post_json(path: str, base_url: str, json: dict | None = None) -> dict | None:
     try:
-        r = httpx.post(f"{base_url}{path}", json=json or {}, timeout=5.0)
+        r = httpx.post(f"{base_url}{path}", json=json or {}, timeout=300.0)
         r.raise_for_status()
         return r.json()
     except Exception:
@@ -350,8 +356,8 @@ def main():
             st.rerun()
 
     # ── Tabs ────────────────────────────────────────────
-    tab_overview, tab_infra, tab_fleet, tab_gpu_tab, tab_net_tab, tab_storage_tab, tab_cool_tab, tab_carbon_tab = st.tabs(
-        ["OVERVIEW", "INFRASTRUCTURE", "FLEET", "GPU", "NETWORK", "STORAGE", "COOLING", "CARBON"]
+    tab_overview, tab_infra, tab_fleet, tab_gpu_tab, tab_net_tab, tab_storage_tab, tab_cool_tab, tab_carbon_tab, tab_eval, tab_leaderboard = st.tabs(
+        ["OVERVIEW", "INFRASTRUCTURE", "FLEET", "GPU", "NETWORK", "STORAGE", "COOLING", "CARBON", "EVAL", "LEADERBOARD"]
     )
 
     thermal_racks = thermal.get("racks", [])
@@ -1107,6 +1113,623 @@ def main():
                 fig = _term_chart2(df, ["cumulative_cost_gbp"],
                                    "CUMULATIVE_COST", "GBP", [C_PURPLE])
                 st.plotly_chart(fig, use_container_width=True, key="carb_cost")
+
+    # ════════════════════════════════════════════════════
+    # TAB: EVAL
+    # ════════════════════════════════════════════════════
+    with tab_eval:
+        st.html(_section_title("EVALUATION & SCORING"))
+
+        # ── Agent + Scenario selector ─────────────────────
+        agents_data = fetch_json("/eval/agents", api_url)
+        agent_list = agents_data.get("agents", []) if agents_data else []
+        agent_names = [a["name"] for a in agent_list] if agent_list else []
+
+        scenarios = fetch_json("/eval/scenarios", api_url)
+        scenario_list = scenarios.get("scenarios", []) if scenarios else []
+        scenario_names = {s["scenario_id"]: f'{s["name"]}  ({s["duration_hours"]:.0f}h / {s["failure_count"]} failures)' for s in scenario_list}
+
+        ev_a1, ev_a2 = st.columns([2, 3])
+        with ev_a1:
+            selected_agent = st.selectbox(
+                "AGENT",
+                options=agent_names if agent_names else ["(none)"],
+                label_visibility="collapsed",
+            )
+        with ev_a2:
+            selected_scenario = st.selectbox(
+                "SCENARIO",
+                options=[s["scenario_id"] for s in scenario_list] if scenario_list else ["steady_state"],
+                format_func=lambda x: scenario_names.get(x, x),
+                label_visibility="collapsed",
+            )
+
+        # Show scenario description
+        sel_info = next((s for s in scenario_list if s["scenario_id"] == selected_scenario), None)
+        if sel_info:
+            st.html(
+                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:4px;'
+                f'padding:10px 14px;margin:8px 0;font-size:11px;color:{C_MUTED};'
+                f"font-family:'Courier New',monospace;\">"
+                f'{sel_info.get("description", sel_info.get("name", ""))}'
+                f'</div>'
+            )
+
+        # ── Custom scenario parameters (expandable) ───────
+        _FAILURE_TYPES = ["crac_degraded", "crac_failure", "gpu_degraded", "pdu_spike", "network_partition"]
+
+        # Defaults from selected predefined scenario
+        default_duration = sel_info["duration_ticks"] if sel_info else 240
+        default_seed = sel_info.get("rng_seed", 42) if sel_info else 42
+        default_arrival = sel_info.get("mean_job_arrival_interval_s", 300.0) if sel_info else 300.0
+        default_failures = sel_info.get("failure_injections", []) if sel_info else []
+
+        with st.expander("CUSTOM SCENARIO PARAMETERS", expanded=False):
+            cust_c1, cust_c2, cust_c3 = st.columns(3)
+            with cust_c1:
+                custom_duration = st.number_input(
+                    "DURATION (ticks)",
+                    min_value=10, max_value=5000,
+                    value=default_duration,
+                    key="custom_duration",
+                )
+            with cust_c2:
+                custom_arrival = st.number_input(
+                    "JOB ARRIVAL INTERVAL (s)",
+                    min_value=10.0, max_value=3600.0,
+                    value=float(default_arrival), step=10.0,
+                    key="custom_arrival",
+                )
+            with cust_c3:
+                custom_seed = st.number_input(
+                    "RNG SEED",
+                    min_value=0, max_value=99999,
+                    value=default_seed,
+                    key="custom_seed",
+                )
+
+            st.html(
+                f'<div style="color:{C_RED};font-size:10px;letter-spacing:1.5px;'
+                f'text-transform:uppercase;font-weight:600;margin:12px 0 6px 0;'
+                f'border-bottom:1px solid {C_BORDER};padding-bottom:4px;">FAILURE INJECTIONS</div>'
+            )
+
+            # Initialise failure rows from scenario defaults (once)
+            if "custom_failures_init" not in st.session_state:
+                st.session_state["custom_failures_init"] = True
+                st.session_state["num_custom_failures"] = len(default_failures)
+                for i, fi in enumerate(default_failures):
+                    st.session_state[f"fi_tick_{i}"] = fi.get("at_tick", 30)
+                    st.session_state[f"fi_type_{i}"] = fi.get("failure_type", "crac_failure")
+                    st.session_state[f"fi_target_{i}"] = fi.get("target", "crac-0")
+                    st.session_state[f"fi_dur_{i}"] = fi.get("duration_s", 1800) or 0
+
+            num_failures = st.session_state.get("num_custom_failures", 0)
+            custom_failures: list[dict] = []
+            for i in range(num_failures):
+                fc1, fc2, fc3, fc4 = st.columns([1, 2, 2, 1])
+                with fc1:
+                    fi_tick = st.number_input("TICK", key=f"fi_tick_{i}", min_value=0, value=st.session_state.get(f"fi_tick_{i}", 30))
+                with fc2:
+                    fi_default_idx = _FAILURE_TYPES.index(st.session_state.get(f"fi_type_{i}", "crac_failure")) if st.session_state.get(f"fi_type_{i}", "crac_failure") in _FAILURE_TYPES else 0
+                    fi_type = st.selectbox("TYPE", _FAILURE_TYPES, key=f"fi_type_{i}", index=fi_default_idx)
+                with fc3:
+                    fi_target = st.text_input("TARGET", key=f"fi_target_{i}", value=st.session_state.get(f"fi_target_{i}", "crac-0"))
+                with fc4:
+                    fi_dur = st.number_input("DUR (s)", key=f"fi_dur_{i}", min_value=0, value=st.session_state.get(f"fi_dur_{i}", 1800))
+                custom_failures.append({"at_tick": fi_tick, "failure_type": fi_type, "target": fi_target, "duration_s": fi_dur if fi_dur > 0 else None})
+
+            fb_c1, fb_c2, _ = st.columns([1, 1, 3])
+            with fb_c1:
+                if st.button("+ ADD FAILURE", use_container_width=True):
+                    st.session_state["num_custom_failures"] = num_failures + 1
+                    st.rerun()
+            with fb_c2:
+                if st.button("CLEAR FAILURES", use_container_width=True):
+                    # Remove all fi_* keys
+                    for k in list(st.session_state.keys()):
+                        if k.startswith("fi_"):
+                            del st.session_state[k]
+                    st.session_state["num_custom_failures"] = 0
+                    st.rerun()
+
+        # ── Build override body ───────────────────────────
+        def _build_overrides() -> dict:
+            """Return custom override fields only if they differ from scenario defaults."""
+            overrides: dict = {}
+            if custom_duration != default_duration:
+                overrides["duration_ticks"] = custom_duration
+            if custom_seed != default_seed:
+                overrides["rng_seed"] = custom_seed
+            if abs(custom_arrival - default_arrival) > 0.01:
+                overrides["mean_job_arrival_interval_s"] = custom_arrival
+            # Compare failure injections
+            if num_failures != len(default_failures):
+                overrides["failure_injections"] = custom_failures
+            else:
+                # Check if any individual failure changed
+                changed = False
+                for i, fi in enumerate(custom_failures):
+                    df = default_failures[i] if i < len(default_failures) else {}
+                    if (fi.get("at_tick") != df.get("at_tick") or
+                        fi.get("failure_type") != df.get("failure_type") or
+                        fi.get("target") != df.get("target") or
+                        fi.get("duration_s") != df.get("duration_s")):
+                        changed = True
+                        break
+                if changed:
+                    overrides["failure_injections"] = custom_failures
+            return overrides
+
+        # ── Control buttons ───────────────────────────────
+        btn_c1, btn_c2 = st.columns([3, 1])
+        with btn_c1:
+            run_agent_btn = st.button("▸ RUN AGENT", use_container_width=True, type="primary")
+        with btn_c2:
+            run_baseline_btn = st.button("RUN BASELINE", use_container_width=True)
+
+        # ── Execute runs ──────────────────────────────────
+        eval_result = None
+        baseline_result = None
+
+        if run_agent_btn and selected_agent and selected_agent != "(none)":
+            req_body = {"agent_name": selected_agent, "scenario_id": selected_scenario}
+            req_body.update(_build_overrides())
+            with st.spinner(f"RUNNING AGENT [{selected_agent.upper()}] ON {selected_scenario.upper()}..."):
+                eval_result = post_json("/eval/run-agent", api_url, json=req_body)
+                if eval_result:
+                    st.session_state["last_eval"] = eval_result
+
+        if run_baseline_btn:
+            req_body = {"scenario_id": selected_scenario}
+            req_body.update(_build_overrides())
+            with st.spinner("COMPUTING BASELINE (no agent)..."):
+                baseline_result = post_json("/eval/run-baseline", api_url, json=req_body)
+                if baseline_result:
+                    st.session_state["last_baseline"] = baseline_result
+
+        # Use last results from session state
+        if "last_eval" in st.session_state:
+            eval_result = st.session_state["last_eval"]
+        if "last_baseline" in st.session_state:
+            baseline_result = st.session_state["last_baseline"]
+
+        if eval_result or baseline_result:
+            primary = eval_result or baseline_result
+
+            # ── Composite score hero card ─────────────────
+            comp_score = primary.get("composite_score", 0)
+            if comp_score >= 70:
+                score_colour = C_GREEN
+                grade = "EXCELLENT"
+            elif comp_score >= 50:
+                score_colour = C_CYAN
+                grade = "GOOD"
+            elif comp_score >= 30:
+                score_colour = C_AMBER
+                grade = "FAIR"
+            else:
+                score_colour = C_RED
+                grade = "POOR"
+
+            run_label = primary.get("run_type", "agent").upper()
+            dur_ticks = primary.get("duration_ticks", 0)
+
+            # Baseline comparison text
+            compare_html = ""
+            if eval_result and baseline_result:
+                delta = eval_result.get("composite_score", 0) - baseline_result.get("composite_score", 0)
+                delta_c = C_GREEN if delta >= 0 else C_RED
+                delta_sign = "+" if delta >= 0 else ""
+                compare_html = (
+                    f'<div style="color:{delta_c};font-size:14px;margin-top:6px;">'
+                    f'{delta_sign}{delta:.1f} vs BASELINE ({baseline_result.get("composite_score", 0):.1f})'
+                    f'</div>'
+                )
+
+            st.html(
+                f'<div style="background:{C_CARD};border:2px solid {score_colour};border-radius:8px;'
+                f'padding:24px;text-align:center;margin:12px 0;">'
+                f'<div style="color:{C_MUTED};font-size:11px;letter-spacing:2px;text-transform:uppercase;">'
+                f'COMPOSITE SCORE — {run_label} — {selected_scenario.upper()}</div>'
+                f'<div style="color:{score_colour};font-size:64px;font-weight:700;'
+                f"font-family:'JetBrains Mono','Courier New',monospace;line-height:1.1;margin:8px 0;\">"
+                f'{comp_score:.1f}</div>'
+                f'<div style="color:{score_colour};font-size:14px;letter-spacing:3px;font-weight:600;">'
+                f'{grade}</div>'
+                f'{compare_html}'
+                f'<div style="color:{C_MUTED};font-size:10px;margin-top:8px;">'
+                f'{dur_ticks} ticks / {dur_ticks * 60 / 3600:.1f}h simulated</div>'
+                f'</div>'
+            )
+
+            # ── Radar chart ──────────────────────────────
+            dims = primary.get("dimensions", [])
+            if dims:
+                import plotly.graph_objects as go
+
+                dim_names = [d["name"].replace("_", " ").upper() for d in dims]
+                dim_scores = [d["score"] for d in dims]
+
+                # Close the polygon
+                radar_names = dim_names + [dim_names[0]]
+                radar_scores = dim_scores + [dim_scores[0]]
+
+                fig = go.Figure()
+
+                fig.add_trace(go.Scatterpolar(
+                    r=radar_scores,
+                    theta=radar_names,
+                    fill="toself",
+                    name=run_label,
+                    line=dict(color=C_CYAN, width=2),
+                    fillcolor="rgba(0,212,255,0.15)",
+                ))
+
+                # Overlay baseline if available
+                if baseline_result and baseline_result.get("dimensions"):
+                    b_dims = baseline_result["dimensions"]
+                    b_scores = [d["score"] for d in b_dims] + [b_dims[0]["score"]]
+                    fig.add_trace(go.Scatterpolar(
+                        r=b_scores,
+                        theta=radar_names,
+                        fill="toself",
+                        name="BASELINE",
+                        line=dict(color=C_MUTED, width=1, dash="dot"),
+                        fillcolor="rgba(74,85,104,0.1)",
+                    ))
+
+                fig.update_layout(
+                    polar=dict(
+                        bgcolor="rgba(0,0,0,0)",
+                        radialaxis=dict(
+                            visible=True,
+                            range=[0, 100],
+                            gridcolor="rgba(30,50,70,0.5)",
+                            linecolor=C_BORDER,
+                            tickfont=dict(color=C_MUTED, size=9),
+                        ),
+                        angularaxis=dict(
+                            gridcolor="rgba(30,50,70,0.5)",
+                            linecolor=C_BORDER,
+                            tickfont=dict(color=C_LABEL, size=10),
+                        ),
+                    ),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color=C_TEXT, family="Courier New"),
+                    showlegend=True,
+                    legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=10, color=C_TEXT)),
+                    height=400,
+                    margin=dict(l=60, r=60, t=30, b=30),
+                )
+
+                st.plotly_chart(fig, use_container_width=True, key="eval_radar")
+
+            # ── Dimension gauge cards ─────────────────────
+            if dims:
+                st.html(_section_title("DIMENSION SCORES"))
+
+                dim_icons = {
+                    "sla_quality": "SLA",
+                    "energy_efficiency": "PWR",
+                    "carbon": "CO2",
+                    "thermal_safety": "TMP",
+                    "cost": "GBP",
+                    "infra_health": "HW",
+                    "failure_response": "FIX",
+                }
+
+                dim_colours = {
+                    "sla_quality": C_GREEN,
+                    "energy_efficiency": C_CYAN,
+                    "carbon": C_GREEN,
+                    "thermal_safety": C_AMBER,
+                    "cost": C_PURPLE,
+                    "infra_health": C_BLUE,
+                    "failure_response": C_RED,
+                }
+
+                cards_html = ""
+                for d in dims:
+                    dname = d["name"]
+                    dscore = d["score"]
+                    dweight = d["weight"]
+
+                    if dscore >= 70:
+                        s_colour = C_GREEN
+                    elif dscore >= 50:
+                        s_colour = C_CYAN
+                    elif dscore >= 30:
+                        s_colour = C_AMBER
+                    else:
+                        s_colour = C_RED
+
+                    accent = dim_colours.get(dname, C_CYAN)
+                    icon = dim_icons.get(dname, "")
+
+                    # Top 2 metrics as subtitle
+                    metrics = d.get("metrics", {})
+                    metric_parts = []
+                    for mk, mv in list(metrics.items())[:3]:
+                        short_key = mk.replace("_pct", "%").replace("_gbp", "£").replace("_kg", "kg")
+                        short_key = short_key.replace("_", " ").upper()[:16]
+                        if isinstance(mv, float):
+                            metric_parts.append(f"{short_key}: {mv:.1f}")
+                        else:
+                            metric_parts.append(f"{short_key}: {mv}")
+                    metric_text = " / ".join(metric_parts)
+
+                    bar_html = _progress_bar(dscore, 100, s_colour, f"{dscore:.0f}", "100")
+
+                    cards_html += (
+                        f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:6px;'
+                        f'padding:14px 16px;position:relative;">'
+                        f'<div style="position:absolute;top:10px;right:12px;color:{accent};font-size:10px;'
+                        f'opacity:0.5;font-weight:700;letter-spacing:1px;">{icon}</div>'
+                        f'<div style="color:{accent};font-size:10px;letter-spacing:1.5px;'
+                        f'text-transform:uppercase;font-weight:600;margin-bottom:4px;">'
+                        f'{dname.replace("_", " ")}</div>'
+                        f'<div style="color:{s_colour};font-size:28px;font-weight:700;'
+                        f"font-family:'JetBrains Mono','Courier New',monospace;\">{dscore:.1f}</div>"
+                        f'<div style="color:{C_MUTED};font-size:9px;margin:2px 0;">WEIGHT: {dweight:.0%}</div>'
+                        f'{bar_html}'
+                        f'<div style="color:{C_MUTED};font-size:9px;margin-top:6px;'
+                        f"font-family:'Courier New',monospace;word-break:break-all;\">"
+                        f'{metric_text}</div>'
+                        f'</div>'
+                    )
+
+                # Responsive grid: 4 cols on first row, 3 on second
+                st.html(
+                    f'<div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:10px;">'
+                    f'{cards_html}'
+                    f'</div>'
+                )
+
+            # ── Expandable raw metrics ────────────────────
+            if dims:
+                with st.expander("RAW METRICS"):
+                    for d in dims:
+                        st.html(
+                            f'<div style="color:{C_CYAN};font-size:11px;letter-spacing:1.5px;'
+                            f'text-transform:uppercase;margin:12px 0 6px 0;font-weight:600;'
+                            f'border-bottom:1px solid {C_BORDER};padding-bottom:4px;">'
+                            f'{d["name"].replace("_", " ")}</div>'
+                        )
+                        metrics = d.get("metrics", {})
+                        rows_html = ""
+                        for mk, mv in metrics.items():
+                            formatted = f"{mv:.4f}" if isinstance(mv, float) else str(mv)
+                            rows_html += (
+                                f'<tr style="border-bottom:1px solid {C_BORDER};">'
+                                f'<td style="padding:4px 8px;font-size:10px;color:{C_LABEL};'
+                                f"font-family:'Courier New',monospace;\">{mk}</td>"
+                                f'<td style="padding:4px 8px;font-size:10px;color:{C_WHITE};'
+                                f"font-family:'Courier New',monospace;text-align:right;\">{formatted}</td>"
+                                f'</tr>'
+                            )
+                        if rows_html:
+                            st.html(
+                                f'<table style="width:100%;border-collapse:collapse;">'
+                                f'<tbody>{rows_html}</tbody></table>'
+                            )
+
+        else:
+            st.html(
+                f'<div style="text-align:center;padding:60px 20px;">'
+                f'<div style="color:{C_MUTED};font-size:13px;letter-spacing:2px;'
+                f'text-transform:uppercase;">NO EVALUATION RESULTS</div>'
+                f'<div style="color:{C_MUTED};font-size:11px;margin-top:12px;">'
+                f'Select an agent and scenario above, then click RUN AGENT to begin.</div>'
+                f'</div>'
+            )
+
+    # ════════════════════════════════════════════════════
+    # TAB: LEADERBOARD
+    # ════════════════════════════════════════════════════
+    with tab_leaderboard:
+        st.html(_section_title("AGENT LEADERBOARD"))
+
+        leaderboard_data = fetch_json("/eval/leaderboard", api_url)
+        lb_entries = leaderboard_data.get("entries", []) if leaderboard_data else []
+
+        if lb_entries:
+            lb_df = pd.DataFrame(lb_entries)
+
+            # ── Summary cards ────────────────────────────
+            total_runs = len(lb_df)
+            unique_agents = lb_df["agent_name"].nunique()
+            best_score = lb_df["composite_score"].max()
+            best_agent = lb_df.loc[lb_df["composite_score"].idxmax(), "agent_name"] if not lb_df.empty else "—"
+
+            lb_s1 = _stat_card("TOTAL RUNS", str(total_runs), C_CYAN, "", "ALL TIME")
+            lb_s2 = _stat_card("UNIQUE AGENTS", str(unique_agents), C_PURPLE, "", "REGISTERED")
+            lb_s3 = _stat_card("BEST SCORE", f"{best_score:.1f}", C_GREEN, "",
+                               f"AGENT: {best_agent.upper()}")
+            avg_score = lb_df["composite_score"].mean()
+            lb_s4 = _stat_card("AVG SCORE", f"{avg_score:.1f}",
+                               C_AMBER if avg_score < 50 else C_GREEN, "", "ALL RUNS")
+
+            st.html(
+                f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:12px;">'
+                f'{lb_s1}{lb_s2}{lb_s3}{lb_s4}'
+                f'</div>'
+            )
+
+            # ── Scenario filter ──────────────────────────
+            all_scenarios = ["ALL"] + sorted(lb_df["scenario_id"].unique().tolist())
+            lb_filter = st.selectbox("FILTER BY SCENARIO", options=all_scenarios,
+                                     label_visibility="collapsed", key="lb_filter")
+            filtered_df = lb_df if lb_filter == "ALL" else lb_df[lb_df["scenario_id"] == lb_filter]
+
+            # ── Leaderboard table ────────────────────────
+            dim_cols = ["sla_quality", "energy_efficiency", "carbon", "thermal_safety",
+                        "cost", "infra_health", "failure_response"]
+
+            sorted_df = filtered_df.sort_values("composite_score", ascending=False)
+
+            header_cells = (
+                f'<th style="text-align:left;padding:8px;font-size:10px;color:{C_LABEL};font-weight:600;">RANK</th>'
+                f'<th style="text-align:left;padding:8px;font-size:10px;color:{C_LABEL};font-weight:600;">AGENT</th>'
+                f'<th style="text-align:left;padding:8px;font-size:10px;color:{C_LABEL};font-weight:600;">SCENARIO</th>'
+                f'<th style="text-align:right;padding:8px;font-size:10px;color:{C_LABEL};font-weight:600;">COMPOSITE</th>'
+            )
+            for dc in dim_cols:
+                short = dc.replace("_", " ").upper()[:10]
+                header_cells += (
+                    f'<th style="text-align:right;padding:8px;font-size:9px;color:{C_LABEL};font-weight:600;">{short}</th>'
+                )
+            header_cells += (
+                f'<th style="text-align:right;padding:8px;font-size:10px;color:{C_LABEL};font-weight:600;">TIME</th>'
+            )
+
+            rows_html = ""
+            for rank, (_, row) in enumerate(sorted_df.head(20).iterrows(), 1):
+                comp = row.get("composite_score", 0)
+                if rank == 1:
+                    rank_colour = C_GREEN
+                elif rank <= 3:
+                    rank_colour = C_CYAN
+                else:
+                    rank_colour = C_TEXT
+
+                comp_colour = C_GREEN if comp >= 70 else (C_CYAN if comp >= 50 else (C_AMBER if comp >= 30 else C_RED))
+
+                cells = (
+                    f'<td style="padding:8px;font-size:11px;color:{rank_colour};font-weight:700;">#{rank}</td>'
+                    f'<td style="padding:8px;font-size:11px;color:{C_WHITE};font-weight:600;">{row["agent_name"].upper()}</td>'
+                    f'<td style="padding:8px;font-size:11px;color:{C_MUTED};">{row["scenario_id"]}</td>'
+                    f'<td style="padding:8px;font-size:12px;color:{comp_colour};font-weight:700;text-align:right;">{comp:.1f}</td>'
+                )
+                for dc in dim_cols:
+                    val = row.get(dc, 0)
+                    dc_c = C_GREEN if val >= 70 else (C_CYAN if val >= 50 else (C_AMBER if val >= 30 else C_RED))
+                    cells += f'<td style="padding:8px;font-size:10px;color:{dc_c};text-align:right;">{val:.0f}</td>'
+
+                ts = str(row.get("timestamp", ""))[:16]
+                cells += f'<td style="padding:8px;font-size:9px;color:{C_MUTED};text-align:right;">{ts}</td>'
+
+                rows_html += f'<tr style="border-bottom:1px solid {C_BORDER};">{cells}</tr>'
+
+            st.html(
+                f'<table style="width:100%;border-collapse:collapse;font-family:\'Courier New\',monospace;">'
+                f'<thead><tr style="border-bottom:1px solid {C_BORDER};">{header_cells}</tr></thead>'
+                f'<tbody>{rows_html}</tbody></table>'
+            )
+
+            # ── Comparison radar chart ───────────────────
+            st.html(_section_title("AGENT COMPARISON"))
+
+            unique_agent_list = sorted(lb_df["agent_name"].unique().tolist())
+            if len(unique_agent_list) >= 1:
+                compare_agents = st.multiselect(
+                    "SELECT AGENTS TO COMPARE",
+                    options=unique_agent_list,
+                    default=unique_agent_list[:min(3, len(unique_agent_list))],
+                    label_visibility="collapsed",
+                    key="lb_compare",
+                )
+
+                if compare_agents:
+                    import plotly.graph_objects as go
+
+                    radar_colours = [C_CYAN, C_GREEN, C_PURPLE, C_AMBER, C_RED, C_BLUE]
+                    fig = go.Figure()
+
+                    for i, agent_name in enumerate(compare_agents[:5]):
+                        agent_df = filtered_df[filtered_df["agent_name"] == agent_name]
+                        if agent_df.empty:
+                            continue
+                        # Use best run for this agent
+                        best_row = agent_df.loc[agent_df["composite_score"].idxmax()]
+                        scores = [best_row.get(dc, 0) for dc in dim_cols]
+                        labels = [dc.replace("_", " ").upper() for dc in dim_cols]
+
+                        # Close polygon
+                        scores_closed = scores + [scores[0]]
+                        labels_closed = labels + [labels[0]]
+
+                        colour = radar_colours[i % len(radar_colours)]
+                        fig.add_trace(go.Scatterpolar(
+                            r=scores_closed,
+                            theta=labels_closed,
+                            fill="toself",
+                            name=agent_name.upper(),
+                            line=dict(color=colour, width=2),
+                            fillcolor=hex_to_rgba(colour, 0.1) if colour.startswith("#") else colour,
+                        ))
+
+                    fig.update_layout(
+                        polar=dict(
+                            bgcolor="rgba(0,0,0,0)",
+                            radialaxis=dict(
+                                visible=True, range=[0, 100],
+                                gridcolor="rgba(30,50,70,0.5)",
+                                linecolor=C_BORDER,
+                                tickfont=dict(color=C_MUTED, size=9),
+                            ),
+                            angularaxis=dict(
+                                gridcolor="rgba(30,50,70,0.5)",
+                                linecolor=C_BORDER,
+                                tickfont=dict(color=C_LABEL, size=10),
+                            ),
+                        ),
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        font=dict(color=C_TEXT, family="Courier New"),
+                        showlegend=True,
+                        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=10, color=C_TEXT)),
+                        height=400,
+                        margin=dict(l=60, r=60, t=30, b=30),
+                    )
+                    st.plotly_chart(fig, use_container_width=True, key="lb_radar")
+
+            # ── Score history chart ──────────────────────
+            if "timestamp" in lb_df.columns and len(lb_df) > 1:
+                st.html(_section_title("SCORE HISTORY"))
+
+                import plotly.graph_objects as go
+
+                history_colours = [C_CYAN, C_GREEN, C_PURPLE, C_AMBER, C_RED, C_BLUE]
+                fig_hist = go.Figure()
+
+                for i, agent_name in enumerate(unique_agent_list[:6]):
+                    agent_df = filtered_df[filtered_df["agent_name"] == agent_name].sort_values("timestamp")
+                    if len(agent_df) < 1:
+                        continue
+                    colour = history_colours[i % len(history_colours)]
+                    fig_hist.add_trace(go.Scatter(
+                        x=list(range(len(agent_df))),
+                        y=agent_df["composite_score"].tolist(),
+                        mode="lines+markers",
+                        name=agent_name.upper(),
+                        line=dict(color=colour, width=2),
+                        marker=dict(size=6),
+                    ))
+
+                fig_hist.update_layout(
+                    height=260,
+                    margin=dict(l=40, r=10, t=30, b=30),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color=C_MUTED, size=10, family="Courier New"),
+                    title=dict(text="COMPOSITE_SCORE_OVER_TIME", font=dict(size=11, color=C_LABEL)),
+                    yaxis=dict(gridcolor="rgba(30,50,70,0.5)", title="SCORE", range=[0, 100]),
+                    xaxis=dict(gridcolor="rgba(30,50,70,0.5)", title="RUN #"),
+                    legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=9)),
+                )
+                st.plotly_chart(fig_hist, use_container_width=True, key="lb_history")
+
+        else:
+            st.html(
+                f'<div style="text-align:center;padding:60px 20px;">'
+                f'<div style="color:{C_MUTED};font-size:13px;letter-spacing:2px;'
+                f'text-transform:uppercase;">NO LEADERBOARD DATA</div>'
+                f'<div style="color:{C_MUTED};font-size:11px;margin-top:12px;">'
+                f'Run an agent from the EVAL tab to populate the leaderboard.</div>'
+                f'</div>'
+            )
 
     # ── Sidebar: auto-refresh ───────────────────────────
     st.sidebar.html(f'<div style="height:20px"></div>')
