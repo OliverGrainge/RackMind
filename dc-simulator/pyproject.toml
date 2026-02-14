@@ -28,6 +28,7 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["dc_sim*", "agents*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

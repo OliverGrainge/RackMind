@@ -188,7 +188,7 @@ def session_status() -> dict:
 @eval_router.get("/agents")
 def list_agents() -> dict:
     """List all registered agent names."""
-    from dc_sim.agents import AGENT_REGISTRY
+    from agents import AGENT_REGISTRY
 
     return {
         "agents": [
@@ -263,8 +263,8 @@ def run_agent(req: RunAgentRequest) -> dict:
     Records the result to the leaderboard CSV.
     Supports optional scenario overrides for custom parameters.
     """
-    from dc_sim.agents import AGENT_REGISTRY
-    from dc_sim.agents.runner import AgentRunner
+    from agents import AGENT_REGISTRY
+    from dc_sim.runner import AgentRunner
 
     if req.agent_name not in AGENT_REGISTRY:
         raise HTTPException(404, f"Unknown agent: {req.agent_name}")
