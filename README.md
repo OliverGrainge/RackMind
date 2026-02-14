@@ -1,8 +1,7 @@
 # DC Simulator
 
-A high-fidelity data centre simulator for developing and benchmarking AI agents that optimise data centre operations — thermal management, power efficiency, workload scheduling, failure response, and carbon reduction.
+A high-fidelity, physics-based data centre simulator for developing and benchmarking AI agents. Train agents to optimise real-world operations — thermal management, power efficiency, workload scheduling, failure response, and carbon reduction — in a safe, repeatable environment with a standardised API and automated evaluation framework.
 
-Built by [Empati Limited](https://empati.co.uk) as an environment for LLM-based agentic AI research.
 
 ## Demo
 
