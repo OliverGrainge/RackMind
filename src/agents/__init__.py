@@ -29,6 +29,13 @@ from agents.random_agent import RandomAgent  # noqa: E402
 
 register_agent(RandomAgent())
 
+# LLM agent (requires: pip install -e ".[llm]" and OPENAI_API_KEY)
+try:
+    from agents.llm_agent import LLMAgent  # noqa: E402
+    register_agent(LLMAgent())
+except ImportError:
+    pass  # langchain not installed
+
 __all__ = [
     "AGENT_REGISTRY",
     "AgentAction",

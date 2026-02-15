@@ -25,6 +25,10 @@ dev = [
     "pytest>=8.0",
     "httpx>=0.27.0",
 ]
+llm = [
+    "langchain-core>=0.3.0",
+    "langchain-openai>=0.2.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
